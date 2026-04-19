@@ -1,0 +1,292 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8">
+<title>Histogram Specification Advanced</title>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+<style>
+body {
+    font-family: 'Segoe UI', sans-serif;
+    background: #0f172a;
+    color: white;
+    text-align: center;
+}
+.container {
+    width: 90%;
+    margin: auto;
+}
+.card {
+    background: #1e293b;
+    padding: 20px;
+    border-radius: 12px;
+    margin: 20px;
+}
+canvas {
+    margin: 10px;
+    border-radius: 8px;
+}
+button {
+    padding: 10px 20px;
+    background: #22c55e;
+    border: none;
+    border-radius: 8px;
+    cursor: pointer;
+}
+input {
+    margin: 10px;
+}
+.table-container {
+    height: 300px;
+    overflow-y: scroll;
+    background: #020617;
+    padding: 10px;
+}
+</style>
+</head>
+
+<body>
+
+<div class="container">
+
+<h1>Histogram Specification (Advanced Web)</h1>
+
+<div class="card">
+    <h3>Upload Gambar</h3>
+    <input type="file" id="sourceInput">
+    <input type="file" id="targetInput">
+    <br><br>
+    <button onclick="processImages()">Proses</button>
+</div>
+
+<div class="card">
+    <h3>Citra</h3>
+    <canvas id="sourceCanvas"></canvas>
+    <canvas id="targetCanvas"></canvas>
+    <canvas id="resultCanvas"></canvas>
+</div>
+
+<div class="card">
+    <h3>Histogram</h3>
+    <canvas id="histChart"></canvas>
+</div>
+
+<div class="card">
+    <h3>CDF</h3>
+    <canvas id="cdfChart"></canvas>
+</div>
+
+<div class="card">
+    <h3>Mapping Table</h3>
+    <div class="table-container">
+        <table id="mappingTable"></table>
+    </div>
+</div>
+
+<div class="card">
+    <h3>Detail Perhitungan</h3>
+    <pre id="log"></pre>
+</div>
+
+</div>
+
+<script>
+
+let sourceImg = new Image();
+let targetImg = new Image();
+
+let sourceReady = false;
+let targetReady = false;
+
+document.getElementById('sourceInput').onchange = e => {
+    sourceReady = false;
+    sourceImg.onload = () => sourceReady = true;
+    sourceImg.src = URL.createObjectURL(e.target.files[0]);
+};
+
+document.getElementById('targetInput').onchange = e => {
+    targetReady = false;
+    targetImg.onload = () => targetReady = true;
+    targetImg.src = URL.createObjectURL(e.target.files[0]);
+};
+
+function log(text){
+    document.getElementById("log").textContent += text + "\n";
+}
+
+function getGray(image, canvasId){
+    let canvas = document.getElementById(canvasId);
+    let ctx = canvas.getContext("2d");
+
+    canvas.width = image.width;
+    canvas.height = image.height;
+    ctx.drawImage(image,0,0);
+
+    let imgData = ctx.getImageData(0,0,canvas.width,canvas.height);
+    let data = imgData.data;
+    let gray=[];
+
+    for(let i=0;i<data.length;i+=4){
+        let g = Math.round(0.299*data[i]+0.587*data[i+1]+0.114*data[i+2]);
+        data[i]=data[i+1]=data[i+2]=g;
+        gray.push(g);
+    }
+    ctx.putImageData(imgData,0,0);
+    return {gray, canvas};
+}
+
+function histogram(gray){
+    let h=new Array(256).fill(0);
+    gray.forEach(v=>h[v]++);
+    return h;
+}
+
+function cdf(hist,total){
+    let c=[], sum=0;
+    for(let i=0;i<256;i++){
+        let p = hist[i]/total;
+        sum+=p;
+        c[i]=sum;
+    }
+    return c;
+}
+
+function mapping(cdfS,cdfT){
+    let map=[];
+    for(let k=0;k<256;k++){
+        let min=1, best=0;
+        for(let z=0;z<256;z++){
+            let d=Math.abs(cdfS[k]-cdfT[z]);
+            if(d<min){min=d;best=z;}
+        }
+        map[k]=best;
+    }
+    return map;
+}
+
+function apply(gray,map){
+    return gray.map(v=>map[v]);
+}
+
+function draw(canvasId,gray,w,h){
+    let canvas=document.getElementById(canvasId);
+    let ctx=canvas.getContext("2d");
+
+    canvas.width=w; canvas.height=h;
+    let imgData=ctx.createImageData(w,h);
+
+    for(let i=0;i<gray.length;i++){
+        let v=gray[i];
+        imgData.data[i*4]=v;
+        imgData.data[i*4+1]=v;
+        imgData.data[i*4+2]=v;
+        imgData.data[i*4+3]=255;
+    }
+    ctx.putImageData(imgData,0,0);
+}
+
+function drawHistogram(hS,hT,hR){
+    new Chart(document.getElementById("histChart"),{
+        type:'line',
+        data:{
+            labels:[...Array(256).keys()],
+            datasets:[
+                {label:'Source',data:hS},
+                {label:'Target',data:hT},
+                {label:'Result',data:hR}
+            ]
+        }
+    });
+}
+
+function drawCDF(cS,cT,cR){
+    new Chart(document.getElementById("cdfChart"),{
+        type:'line',
+        data:{
+            labels:[...Array(256).keys()],
+            datasets:[
+                {label:'CDF Source',data:cS},
+                {label:'CDF Target',data:cT},
+                {label:'CDF Result',data:cR}
+            ]
+        }
+    });
+}
+
+function showMapping(map,cS,cT){
+    let table=document.getElementById("mappingTable");
+    table.innerHTML="<tr><th>k</th><th>CDF S</th><th>Mapping</th><th>CDF T</th></tr>";
+
+    for(let i=0;i<256;i++){
+        table.innerHTML+=`<tr>
+            <td>${i}</td>
+            <td>${cS[i].toFixed(4)}</td>
+            <td>${map[i]}</td>
+            <td>${cT[map[i]].toFixed(4)}</td>
+        </tr>`;
+    }
+}
+
+function processImages(){
+
+    document.getElementById("log").textContent="";
+    log("Memulai proses...\n");
+
+    function startProcess(){
+        let s=getGray(sourceImg,"sourceCanvas");
+        let t=getGray(targetImg,"targetCanvas");
+
+        let histS=histogram(s.gray);
+        let histT=histogram(t.gray);
+
+        let cdfS=cdf(histS,s.gray.length);
+        let cdfT=cdf(histT,t.gray.length);
+
+        let map=mapping(cdfS,cdfT);
+        let result=apply(s.gray,map);
+
+        draw("resultCanvas",result,s.canvas.width,s.canvas.height);
+
+        let histR=histogram(result);
+        let cdfR=cdf(histR,result.length);
+
+        drawHistogram(histS,histT,histR);
+        drawCDF(cdfS,cdfT,cdfR);
+        showMapping(map,cdfS,cdfT);
+
+        log("=== HISTOGRAM SOURCE SAMPLE ===");
+        for(let i=0;i<10;i++){
+            log(`k=${i} h=${histS[i]}`);
+        }
+
+        log("\n=== CDF SAMPLE ===");
+        for(let i=0;i<10;i++){
+            log(`k=${i} CDF=${cdfS[i].toFixed(4)}`);
+        }
+
+        log("\n=== MAPPING SAMPLE ===");
+        for(let i=0;i<10;i++){
+            log(`M[${i}] = ${map[i]}`);
+        }
+
+        log("\nProses selesai!");
+    }
+
+    if(sourceReady && targetReady){
+        startProcess();
+    } else {
+        log("Menunggu gambar siap...");
+        let check = setInterval(() => {
+            if(sourceReady && targetReady){
+                clearInterval(check);
+                startProcess();
+            }
+        }, 100);
+    }
+}
+
+</script>
+
+</body>
+</html>
